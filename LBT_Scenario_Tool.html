@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LBT · Leisure Ridership Scenario Planning</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 15px; }
+    body { background: #f9f9f7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #1a1a1a; }
+    input[type=range] { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: #ddd; outline: none; cursor: pointer; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #1a1a1a; cursor: pointer; }
+    input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #1a1a1a; border: none; cursor: pointer; }
+    select { appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23999' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px !important; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+
+const PERSONAS = {
+  nightlife: { name: "DTLB Nightlife Couple",  desc: "Marcus & Jade · 90802/90804 · Uber-dependent nights out", baseConv: 0.12, uber: 0.7, cpi: 0.3, venue: 0.4, gp: 0.1, awareness: 0.6, color: "#1D9E75" },
+  beach:     { name: "Weekend Beach Regular",   desc: "Sofia & friends · 90805/90806 · Group beach logistics",   baseConv: 0.10, uber: 0.4, cpi: 0.5, venue: 0.3, gp: 0.1, awareness: 0.5, color: "#378ADD" },
+  event:     { name: "Event-Goer",              desc: "Tyler · 90802/90814 · Concert & Grand Prix rider",        baseConv: 0.15, uber: 0.8, cpi: 0.4, venue: 0.6, gp: 0.9, awareness: 0.5, color: "#BA7517" },
+  bruncher:  { name: "Belmont Bruncher",        desc: "Kayla & Ben · 90814 · 2nd Street weekend trips",         baseConv: 0.13, uber: 0.5, cpi: 0.4, venue: 0.7, gp: 0.1, awareness: 0.6, color: "#D4537E" },
+};
+
+const ZIP_POP  = { "90804":45000,"90814":28000,"90807":36000,"90806":42000,"90815":33000,"90805":92000,"90802":29000,"90803":26000 };
+const TIER_MAP = { "90804":1,"90814":1,"90807":1,"90806":2,"90815":2,"90805":2,"90802":3,"90803":3 };
+const PZIPS    = { nightlife:["90802","90804"], beach:["90805","90806","90804"], event:["90802","90814","90803"], bruncher:["90814","90803","90807","90815"] };
+const ALL_ZIPS = [
+  { zip:"90804", label:"90804 Central LB",    tier:1 },
+  { zip:"90814", label:"90814 Alamitos Hts",  tier:1 },
+  { zip:"90807", label:"90807 Bixby Knolls",  tier:1 },
+  { zip:"90806", label:"90806 West LB",       tier:2 },
+  { zip:"90815", label:"90815 East LB",       tier:2 },
+  { zip:"90805", label:"90805 North LB",      tier:2 },
+  { zip:"90802", label:"90802 Downtown",      tier:3 },
+  { zip:"90803", label:"90803 Belmont Shore", tier:3 },
+];
+
+function freqMult(sens, targetFreq, reachW) {
+  return 1 + sens * (1 - reachW) * (1 - Math.exp(-targetFreq / 4)) * 0.6;
+}
+function computeConv(key, vals) {
+  const p = PERSONAS[key];
+  const fsMap = { nightlife: vals.fsNight, beach: vals.fsBeach, event: vals.fsEvent, bruncher: vals.fsBrunch };
+  let c = p.baseConv;
+  c += (vals.uber - 100) / 100 * p.uber * 0.4;
+  c += Math.max(0, vals.cpi - 2) / 8 * p.cpi * 0.3;
+  c += (vals.gas - 4) / 3 * 0.1;
+  c += (20 - vals.freqPass) / 20 * 0.08;
+  c += Math.min(vals.venues / 12, 1) * p.venue * 0.15;
+  if (vals.lever === "awareness") c += p.awareness * 0.2;
+  else if (vals.lever === "cost")  c += 0.12;
+  else if (vals.lever === "venue") c += p.venue * 0.22;
+  else if (vals.lever === "gp")    c += p.gp * 0.25;
+  else c += (p.awareness + p.venue + p.gp) * 0.06;
+  c *= freqMult(fsMap[key], vals.targetFreq, vals.reachW);
+  return Math.min(0.65, Math.max(0.02, c));
+}
+function zipBudget(z, vals, activeZips) {
+  const tier = TIER_MAP[z] || 3;
+  const t1c = activeZips.filter(x => TIER_MAP[x] === 1).length || 1;
+  const t2c = activeZips.filter(x => TIER_MAP[x] === 2).length || 1;
+  const t3c = activeZips.filter(x => (TIER_MAP[x] || 3) === 3).length || 1;
+  const share = tier === 1 ? vals.tier1 / t1c : tier === 2 ? vals.tier2 / t2c : Math.max(0, 1 - vals.tier1 - vals.tier2) / t3c;
+  return vals.spend * 1000 * vals.duration * share;
+}
+function zipSat(z, vals, activeZips) {
+  const budget = zipBudget(z, vals, activeZips);
+  const target = (ZIP_POP[z] || 30000) * 0.15;
+  const reach  = Math.min(target, (budget / 2.5) * vals.reachW);
+  return Math.min(1, reach / target);
+}
+function computeTotals(vals, activeZips, activePersonas) {
+  let riders = 0, reach = 0;
+  activeZips.forEach(z => {
+    const budget = zipBudget(z, vals, activeZips);
+    const target = (ZIP_POP[z] || 30000) * 0.15;
+    const r = Math.min(target, (budget / 2.5) * vals.reachW);
+    reach += r;
+    let pConv = 0, pCount = 0;
+    activePersonas.forEach(pk => { if (PZIPS[pk].includes(z)) { pConv += computeConv(pk, vals); pCount++; } });
+    riders += r * (pCount > 0 ? pConv / pCount : 0.05);
+  });
+  return { riders: Math.round(riders), reach: Math.round(reach) };
+}
+function getConf(vals) {
+  return Math.round((vals.mStops * 0.25 + vals.mControl * 0.30 + vals.mEvents * 0.25 + vals.mSig * 0.20) * 100);
+}
+function getRF(conf) {
+  const c = conf / 100;
+  return { low: Math.max(0.35, 1 - (0.55 - c * 0.45)), high: Math.min(1.85, 1 + (0.55 - c * 0.45)) };
+}
+function confLabel(c) {
+  if (c >= 75) return { label: "High",   color: "#1D9E75" };
+  if (c >= 45) return { label: "Medium", color: "#BA7517" };
+  return              { label: "Low",    color: "#D85A30" };
+}
+function avgFM(vals, activePersonas) {
+  if (!activePersonas.length) return 1;
+  const fsMap = { nightlife: vals.fsNight, beach: vals.fsBeach, event: vals.fsEvent, bruncher: vals.fsBrunch };
+  return activePersonas.reduce((s, k) => s + freqMult(fsMap[k], vals.targetFreq, vals.reachW), 0) / activePersonas.length;
+}
+function fmt(n) { return Math.round(n).toLocaleString(); }
+
+function Slider({ label, min, max, step, value, onChange, display }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:13 }}>
+      <span style={{ fontSize:13, color:"#555", minWidth:175 }}>{label}</span>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={e => onChange(+e.target.value)}
+        style={{ flex:1, cursor:"pointer" }} />
+      <span style={{ fontSize:13, fontWeight:500, minWidth:58, textAlign:"right" }}>{display}</span>
+    </div>
+  );
+}
+
+function MetricCard({ label, val, range, color }) {
+  return (
+    <div style={{ background:"#f5f5f3", borderRadius:8, padding:"14px 16px" }}>
+      <div style={{ fontSize:12, color:"#666", marginBottom:4 }}>{label}</div>
+      <div style={{ fontSize:20, fontWeight:500, color: color || "#1a1a1a", lineHeight:1.2 }}>{val}</div>
+      {range && <div style={{ fontSize:11, color:"#999", marginTop:4 }}>{range}</div>}
+    </div>
+  );
+}
+
+function Bar({ label, pct, rangeLow, rangeHigh, color }) {
+  return (
+    <div style={{ marginBottom:10 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#555", marginBottom:4 }}>
+        <span>{label}</span>
+        <span>{pct}% <span style={{ color:"#aaa", fontWeight:400 }}>({rangeLow}–{rangeHigh}%)</span></span>
+      </div>
+      <div style={{ background:"#ebebeb", borderRadius:3, height:7, position:"relative", overflow:"hidden" }}>
+        <div style={{ position:"absolute", top:0, left:`${rangeLow}%`, width:`${Math.max(0,rangeHigh-rangeLow)}%`, height:"100%", background:color, opacity:0.22, borderRadius:3 }} />
+        <div style={{ width:`${pct}%`, height:"100%", background:color, borderRadius:3, transition:"width 0.3s" }} />
+      </div>
+    </div>
+  );
+}
+
+function SatBar({ label, pct }) {
+  const color = pct > 80 ? "#D85A30" : pct > 50 ? "#BA7517" : "#1D9E75";
+  const note  = pct > 80 ? " — saturated" : pct > 50 ? " — approaching" : " — room to grow";
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:7 }}>
+      <span style={{ fontSize:12, color:"#666", minWidth:175 }}>{label}{note}</span>
+      <div style={{ flex:1, background:"#ebebeb", borderRadius:3, height:6, overflow:"hidden" }}>
+        <div style={{ width:`${pct}%`, height:"100%", background:color, borderRadius:3, transition:"width 0.3s" }} />
+      </div>
+      <span style={{ fontSize:12, fontWeight:500, minWidth:34, textAlign:"right" }}>{pct}%</span>
+    </div>
+  );
+}
+
+const TABS = ["Inputs","Reach vs. freq.","Personas","ZIPs","Measurement"];
+
+function App() {
+  const [tab, setTab] = useState(0);
+  const [activePersonas, setActivePersonas] = useState(["nightlife","beach","event","bruncher"]);
+  const [activeZips,     setActiveZips]     = useState(["90804","90814","90807"]);
+  const [copied, setCopied] = useState(false);
+  const [spend,    setSpend]    = useState(45);
+  const [digital,  setDigital]  = useState(50);
+  const [duration, setDuration] = useState(12);
+  const [cpi,      setCpi]      = useState(4);
+  const [uber,     setUber]     = useState(120);
+  const [gas,      setGas]      = useState(5.25);
+  const [freqPass, setFreqPass] = useState(15);
+  const [aqua,     setAqua]     = useState(4);
+  const [venues,   setVenues]   = useState(4);
+  const [tier1,    setTier1]    = useState(60);
+  const [tier2,    setTier2]    = useState(30);
+  const [lever,    setLever]    = useState("awareness");
+  const [reachW,   setReachW]   = useState(70);
+  const [targetFreq, setTargetFreq] = useState(4);
+  const [fsNight,  setFsNight]  = useState(40);
+  const [fsBeach,  setFsBeach]  = useState(50);
+  const [fsEvent,  setFsEvent]  = useState(20);
+  const [fsBrunch, setFsBrunch] = useState(80);
+  const [mStops,   setMStops]   = useState(50);
+  const [mControl, setMControl] = useState(40);
+  const [mEvents,  setMEvents]  = useState(70);
+  const [mSig,     setMSig]     = useState(30);
+
+  const vals = {
+    spend, digital, duration, cpi, uber, gas, freqPass, aqua, venues,
+    tier1: tier1/100, tier2: tier2/100, lever,
+    reachW: reachW/100, targetFreq,
+    fsNight: fsNight/100, fsBeach: fsBeach/100, fsEvent: fsEvent/100, fsBrunch: fsBrunch/100,
+    mStops: mStops/100, mControl: mControl/100, mEvents: mEvents/100, mSig: mSig/100,
+  };
+
+  const { riders, reach } = computeTotals(vals, activeZips, activePersonas);
+  const conf = getConf(vals);
+  const rf   = getRF(conf);
+  const rLow = Math.round(riders * rf.low), rHigh = Math.round(riders * rf.high);
+  const ret  = Math.round(riders * 0.28);
+  const totalSpend = spend * 1000 * duration;
+  const cpr  = riders > 0 ? Math.round(totalSpend / riders) : 0;
+  const cprL = rHigh > 0 ? Math.round(totalSpend / rHigh) : 0;
+  const cprH = rLow  > 0 ? Math.round(totalSpend / rLow)  : 0;
+  const fm   = avgFM(vals, activePersonas);
+  const totalTarget = activeZips.reduce((s,z) => s + (ZIP_POP[z]||30000)*0.15, 0);
+  const avgImps = reach > 0 ? ((totalSpend)/(reach*2.5)).toFixed(1) : "—";
+  const cl   = confLabel(conf);
+  const mode = reachW >= 60 ? "Reach-first" : reachW <= 40 ? "Frequency-first" : "Balanced";
+  const modeColor = { "Reach-first":["#E1F5EE","#0F6E56"], "Frequency-first":["#FAEEDA","#633806"], "Balanced":["#E6F1FB","#185FA5"] }[mode];
+
+  const convLine = activePersonas.map(pk => {
+    const conv = computeConv(pk, vals);
+    const fsMap = { nightlife: vals.fsNight, beach: vals.fsBeach, event: vals.fsEvent, bruncher: vals.fsBrunch };
+    const fm2 = freqMult(fsMap[pk]||0.5, vals.targetFreq, vals.reachW);
+    return `${PERSONAS[pk].name}: ${Math.round(conv*100)}% (freq lift +${Math.round((fm2-1)*100)}%)`;
+  }).join(" | ");
+  const satLine = activeZips.map(z => `${z}: ${Math.round(zipSat(z,vals,activeZips)*100)}%`).join(", ");
+
+  const snapshot = `Spend: $${spend}K/mo × ${duration} mo = $${spend*duration}K | Digital: ${digital}% | Lever: ${lever} | BID: ${venues}/yr
+CPI: ${cpi>=0?"+":""}${cpi.toFixed(1)}% | Rideshare: ${uber} | Gas: $${gas.toFixed(2)} | Passport: ${freqPass} min
+Reach/freq mode: ${mode} (${reachW}% reach / ${100-reachW}% freq) | Target freq: ${targetFreq}×
+ZIPs: ${activeZips.join(", ")} | ZIP saturation: ${satLine}
+Measurement confidence: ${conf}% (${cl.label}) | Range: ${fmt(rLow)}–${fmt(rHigh)}
+Trial riders: ${fmt(riders)} | Retained: ${fmt(ret)} | CPR: $${cpr} | Effective reach: ${fmt(reach)} | Avg imps: ${avgImps}×
+Freq. lift on conversion: +${Math.round((fm-1)*100)}% blended
+Conversion by persona: ${convLine}`;
+
+  const prompts = {
+    analyze:   `Please analyze this LBT scenario planning output including reach/frequency dynamics and ZIP saturation:\n\n${snapshot}\n\nProvide: (1) overall viability, (2) reach vs. frequency tradeoff assessment for this persona mix, (3) which ZIPs are saturated and what that means for budget allocation, (4) one tactical recommendation, (5) two metrics to watch.`,
+    frequency: `Based on this LBT scenario, what is the optimal reach vs. frequency split for this specific persona mix and budget level?\n\n${snapshot}`,
+    zips:      `Given the ZIP saturation levels in this scenario, should LBT add more ZIPs? Which ones, in what order, and how should budget be reallocated?\n\n${snapshot}\n\nContext: Tier 1 ZIPs are 90804/90814/90807. Tier 2 are 90806/90815/90805 (90805 has 92K population). Sweet spot is Walk Score 55–75.`,
+  };
+
+  function copy(text, label) {
+    navigator.clipboard.writeText(text).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    });
+    setCopied(label);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  function togglePersona(pk) {
+    setActivePersonas(prev => prev.includes(pk) ? prev.filter(x=>x!==pk) : [...prev, pk]);
+  }
+  function toggleZip(z) {
+    setActiveZips(prev => prev.includes(z) ? prev.filter(x=>x!==z) : [...prev, z]);
+  }
+
+  const divider = <hr style={{ border:"none", borderTop:"0.5px solid #e0e0dc", margin:"1.25rem 0" }} />;
+
+  return (
+    <div style={{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif", maxWidth:820, margin:"0 auto", padding:"1.5rem 1rem", color:"#1a1a1a", fontSize:15 }}>
+
+      {/* Header */}
+      <div style={{ marginBottom:"1.5rem" }}>
+        <div style={{ display:"inline-block", fontSize:11, fontWeight:600, letterSpacing:"0.08em", textTransform:"uppercase", color:"#0F6E56", background:"#E1F5EE", padding:"4px 10px", borderRadius:20, marginBottom:10 }}>Long Beach Transit</div>
+        <h1 style={{ fontSize:24, fontWeight:600, marginBottom:6 }}>Leisure Ridership Scenario Planning</h1>
+        <p style={{ fontSize:13, color:"#666" }}>Leisure & Social Trip Strategy · March 2026 · Adjust inputs to model trial riders, retention, and cost efficiency.</p>
+      </div>
+
+      {/* Main card */}
+      <div style={{ background:"#fff", borderRadius:12, border:"0.5px solid #e0e0dc", padding:"1.5rem", marginBottom:"1.25rem" }}>
+        <div style={{ display:"flex", border:"0.5px solid #e0e0dc", borderRadius:8, overflow:"hidden", marginBottom:"1.5rem" }}>
+          {TABS.map((t,i) => (
+            <button key={t} onClick={() => setTab(i)} style={{ flex:1, padding:"9px 4px", fontSize:13, textAlign:"center", cursor:"pointer", color: tab===i?"#1a1a1a":"#777", background: tab===i?"#f5f5f3":"#fff", border:"none", fontFamily:"inherit", fontWeight: tab===i?500:400 }}>{t}</button>
+          ))}
+        </div>
+
+        {tab===0 && <>
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>Marketing investment</p>
+          <Slider label="Monthly spend ($K)"       min={5}   max={200} step={5}    value={spend}    onChange={setSpend}    display={`$${spend}K`} />
+          <Slider label="Channel mix — digital %"  min={20}  max={100} step={5}    value={digital}  onChange={setDigital}  display={`${digital}%`} />
+          <Slider label="Campaign duration (mo)"   min={1}   max={18}  step={1}    value={duration} onChange={setDuration} display={`${duration} mo`} />
+          {divider}
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>Economic environment</p>
+          <Slider label="CPI shift (YoY %)"        min={-2}  max={10}  step={0.5}  value={cpi}      onChange={setCpi}      display={`${cpi>=0?"+":""}${cpi.toFixed(1)}%`} />
+          <Slider label="Rideshare price index"    min={80}  max={160} step={5}    value={uber}     onChange={setUber}     display={`${uber}`} />
+          <Slider label="Gas price ($/gal)"        min={3}   max={7}   step={0.25} value={gas}      onChange={setGas}      display={`$${gas.toFixed(2)}`} />
+          {divider}
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>Service & product</p>
+          <Slider label="Passport frequency (min)" min={10}  max={30}  step={5}    value={freqPass} onChange={setFreqPass} display={`${freqPass} min`} />
+          <Slider label="AquaLink seasonal months" min={2}   max={8}   step={1}    value={aqua}     onChange={setAqua}     display={`${aqua} mo`} />
+          <Slider label="BID activations / year"   min={0}   max={24}  step={1}    value={venues}   onChange={setVenues}   display={`${venues}`} />
+        </>}
+
+        {tab===1 && <>
+          <div style={{ background:"#f5f5f3", borderRadius:10, padding:"1rem 1.25rem", marginBottom:"1.25rem" }}>
+            <div style={{ display:"flex", alignItems:"center", marginBottom:10 }}>
+              <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", margin:0 }}>Reach vs. frequency mode</p>
+              <span style={{ marginLeft:10, fontSize:11, fontWeight:500, padding:"3px 10px", borderRadius:20, background:modeColor[0], color:modeColor[1] }}>{mode}</span>
+            </div>
+            <p style={{ fontSize:13, color:"#666", marginBottom:"1rem", lineHeight:1.6 }}>Controls how budget splits between finding new people (reach) and re-hitting the same people (frequency). Reach-first maximises trial riders. Frequency-first increases conversion among already-reached audiences — most effective for the Belmont Bruncher.</p>
+            <Slider label="Reach priority"        min={0} max={100} step={10} value={reachW}     onChange={setReachW}     display={`${reachW}%`} />
+            <Slider label="Target avg. frequency" min={1} max={12}  step={1}  value={targetFreq} onChange={setTargetFreq} display={`${targetFreq}×`} />
+          </div>
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>Frequency sensitivity by persona</p>
+          <Slider label="Nightlife Couple"  min={0} max={100} step={10} value={fsNight}  onChange={setFsNight}  display={`${fsNight}%`} />
+          <Slider label="Beach Regular"     min={0} max={100} step={10} value={fsBeach}  onChange={setFsBeach}  display={`${fsBeach}%`} />
+          <Slider label="Event-Goer"        min={0} max={100} step={10} value={fsEvent}  onChange={setFsEvent}  display={`${fsEvent}%`} />
+          <Slider label="Belmont Bruncher"  min={0} max={100} step={10} value={fsBrunch} onChange={setFsBrunch} display={`${fsBrunch}%`} />
+          {divider}
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>ZIP saturation status</p>
+          {activeZips.map(z => <SatBar key={z} label={z} pct={Math.round(zipSat(z,vals,activeZips)*100)} />)}
+          <div style={{ background:"#f5f5f3", borderRadius:8, padding:"12px 16px", fontSize:13, color:"#666", lineHeight:1.6, marginTop:10 }}>Above ~80% saturation, additional spend in that ZIP yields diminishing returns — expand to new ZIPs instead.</div>
+        </>}
+
+        {tab===2 && <>
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>Active personas — click to toggle</p>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:"1.25rem" }}>
+            {Object.entries(PERSONAS).map(([pk,p]) => (
+              <div key={pk} onClick={() => togglePersona(pk)} style={{ border: activePersonas.includes(pk)?"1.5px solid #1D9E75":"0.5px solid #e0e0dc", borderRadius:8, padding:"10px 12px", cursor:"pointer", background: activePersonas.includes(pk)?"#E1F5EE":"#fff" }}>
+                <div style={{ fontSize:13, fontWeight:500, color: activePersonas.includes(pk)?"#0F6E56":"#1a1a1a", marginBottom:2 }}>{p.name}</div>
+                <div style={{ fontSize:11, color:"#777" }}>{p.desc}</div>
+              </div>
+            ))}
+          </div>
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:10 }}>Primary conversion lever</p>
+          <select value={lever} onChange={e=>setLever(e.target.value)} style={{ fontFamily:"inherit", fontSize:13, padding:"8px 12px", borderRadius:8, border:"0.5px solid #ccc", background:"#fff", width:"100%", marginBottom:"1rem", cursor:"pointer" }}>
+            <option value="awareness">Awareness-first (social + organic)</option>
+            <option value="cost">Cost framing (price comparison creative)</option>
+            <option value="venue">BID / OOH event intercept</option>
+            <option value="gp">Grand Prix campaign anchor</option>
+            <option value="mixed">Mixed / all levers simultaneously</option>
+          </select>
+        </>}
+
+        {tab===3 && <>
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>ZIP targeting — click to toggle</p>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:"1rem" }}>
+            {ALL_ZIPS.map(({zip,label,tier}) => (
+              <span key={zip} onClick={() => toggleZip(zip)} style={{ fontSize:12, padding:"5px 11px", borderRadius:20, border: activeZips.includes(zip)?"1px solid #378ADD":"0.5px solid #ccc", cursor:"pointer", background: activeZips.includes(zip)?"#E6F1FB":"#fff", color: activeZips.includes(zip)?"#185FA5":"#666" }}>
+                {label} <span style={{ opacity:0.6, fontSize:10 }}>T{tier}</span>
+              </span>
+            ))}
+          </div>
+          {divider}
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>Spend allocation by tier</p>
+          <Slider label="Tier 1 share" min={10} max={90} step={5} value={tier1} onChange={setTier1} display={`${tier1}%`} />
+          <Slider label="Tier 2 share" min={5}  max={60} step={5} value={tier2} onChange={setTier2} display={`${tier2}%`} />
+        </>}
+
+        {tab===4 && <>
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>Measurement infrastructure</p>
+          <Slider label="Stop-level data granularity"    min={0} max={100} step={10} value={mStops}   onChange={setMStops}   display={`${mStops}%`} />
+          <Slider label="Control ZIP availability"       min={0} max={100} step={10} value={mControl} onChange={setMControl} display={`${mControl}%`} />
+          <Slider label="Event-week isolation"           min={0} max={100} step={10} value={mEvents}  onChange={setMEvents}  display={`${mEvents}%`} />
+          <Slider label="Leisure trip signature tagging" min={0} max={100} step={10} value={mSig}     onChange={setMSig}     display={`${mSig}%`} />
+          {divider}
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:12 }}>Confidence breakdown</p>
+          {[
+            { label:"Stop-level data granularity",    val:mStops,   w:"25%" },
+            { label:"Synthetic control ZIPs",         val:mControl, w:"30%" },
+            { label:"Event-week isolation",           val:mEvents,  w:"25%" },
+            { label:"Leisure trip signature tagging", val:mSig,     w:"20%" },
+          ].map(m => {
+            const dot = m.val>=70?"#1D9E75":m.val>=40?"#BA7517":"#D85A30";
+            return (
+              <div key={m.label} style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"#666", margin:"5px 0", alignItems:"center" }}>
+                <span><span style={{ display:"inline-block", width:8, height:8, borderRadius:"50%", background:dot, marginRight:7, verticalAlign:"middle" }} />{m.label}</span>
+                <span style={{ fontWeight:500 }}>{m.val}% <span style={{ color:"#aaa", fontWeight:400 }}>(wt. {m.w})</span></span>
+              </div>
+            );
+          })}
+          <div style={{ marginTop:14, fontSize:13, color:"#666" }}>
+            Overall confidence: <span style={{ fontWeight:500, color:cl.color }}>{conf}% ({cl.label})</span>
+          </div>
+        </>}
+      </div>
+
+      {/* Outcomes */}
+      <div style={{ background:"#fff", borderRadius:12, border:"0.5px solid #e0e0dc", padding:"1.5rem", marginBottom:"1.25rem" }}>
+        <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:14 }}>Projected outcomes</p>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,minmax(0,1fr))", gap:10, marginBottom:10 }}>
+          <MetricCard label="Trial riders"         val={fmt(riders)}  range={`${fmt(rLow)} – ${fmt(rHigh)} range`} />
+          <MetricCard label="Retained riders"      val={fmt(ret)}     range={`${fmt(Math.round(rLow*0.28))} – ${fmt(Math.round(rHigh*0.28))} range`} />
+          <MetricCard label="Cost / trial rider"   val={`$${cpr}`}    range={`$${cprL} – $${cprH} range`} />
+          <MetricCard label="Freq. lift on conv."  val={`+${Math.round((fm-1)*100)}%`} range="vs. reach-only baseline" />
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(2,minmax(0,1fr))", gap:10 }}>
+          <MetricCard label="Effective reach"           val={fmt(reach)}    range={`${Math.round(reach/totalTarget*100)}% of target population`} />
+          <MetricCard label="Avg. impressions / person" val={`${avgImps}×`} range="avg. per reached person" />
+        </div>
+      </div>
+
+      {/* Persona bars */}
+      <div style={{ background:"#fff", borderRadius:12, border:"0.5px solid #e0e0dc", padding:"1.5rem", marginBottom:"1.25rem" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+          <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", margin:0 }}>Persona conversion likelihood</p>
+          <span style={{ fontSize:11, color:"#aaa" }}>bar = point estimate · shaded = confidence range</span>
+        </div>
+        {activePersonas.map(pk => {
+          const conv = computeConv(pk, vals);
+          const pct  = Math.round(conv * 100);
+          const rl   = Math.max(0,  Math.round(conv * rf.low  * 100));
+          const rh   = Math.min(65, Math.round(conv * rf.high * 100));
+          return <Bar key={pk} label={PERSONAS[pk].name} pct={pct} rangeLow={rl} rangeHigh={rh} color={PERSONAS[pk].color} />;
+        })}
+      </div>
+
+      {/* Snapshot */}
+      <div style={{ background:"#fff", borderRadius:12, border:"0.5px solid #e0e0dc", padding:"1.5rem" }}>
+        <p style={{ fontSize:11, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.08em", color:"#aaa", marginBottom:12 }}>Scenario snapshot</p>
+        <pre style={{ background:"#f5f5f3", borderRadius:8, padding:"12px 16px", fontSize:12, color:"#555", lineHeight:1.8, fontFamily:"'SF Mono','Fira Code',monospace", whiteSpace:"pre-wrap", wordBreak:"break-word", marginBottom:14 }}>{snapshot}</pre>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+          <button onClick={() => copy(snapshot,"snap")} style={{ background: copied==="snap"?"#1D9E75":"#1a1a1a", color:"#fff", border:"none", borderRadius:8, padding:"9px 18px", fontSize:13, cursor:"pointer", fontFamily:"inherit", fontWeight:500 }}>
+            {copied==="snap" ? "Copied!" : "Copy scenario"}
+          </button>
+          {[["analyze","Full analysis prompt"],["frequency","Reach/freq prompt"],["zips","ZIP expansion prompt"]].map(([k,l]) => (
+            <button key={k} onClick={() => copy(prompts[k],k)} style={{ background: copied===k?"#E1F5EE":"#fff", color: copied===k?"#0F6E56":"#1a1a1a", border:"0.5px solid #ccc", borderRadius:8, padding:"9px 14px", fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>
+              {copied===k ? "Copied!" : l}
+            </button>
+          ))}
+        </div>
+        <div style={{ background:"#f5f5f3", borderRadius:8, padding:"12px 16px", fontSize:13, color:"#666", lineHeight:1.6 }}>
+          Copy any prompt above and paste into Claude (claude.ai) for strategic analysis. The snapshot captures all current inputs and model outputs automatically.
+        </div>
+      </div>
+
+      <div style={{ textAlign:"center", fontSize:12, color:"#aaa", marginTop:"2rem", paddingTop:"1rem", borderTop:"0.5px solid #e0e0dc" }}>
+        Long Beach Transit · Leisure & Social Trip Strategy · March 2026 · For internal planning use only
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.render(<App />, document.getElementById('root'));
+</script>
+</body>
+</html>
