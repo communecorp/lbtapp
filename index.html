@@ -182,8 +182,8 @@ function SatBar({ label, pct }) {
 
 // ── Riders vs Spend SVG Chart ────────────────────────────────────────────────
 function SpendCurveChart({ vals, activeZips, activePersonas, currentSpend }) {
-  const W = 580, H = 210;
-  const PAD = { top:20, right:20, bottom:42, left:54 };
+  const W = 580, H = 220;
+  const PAD = { top:36, right:32, bottom:44, left:54 };
   const iW = W - PAD.left - PAD.right;
   const iH = H - PAD.top - PAD.bottom;
 
@@ -210,7 +210,10 @@ function SpendCurveChart({ vals, activeZips, activePersonas, currentSpend }) {
   const xTicks = [5,50,100,150,200];
 
   // tooltip box positioning — keep inside chart
-  const ttW = 108, ttH = 24, ttX = Math.min(cx - ttW/2, PAD.left+iW-ttW), ttY = cy - ttH - 10;
+  const ttW = 116, ttH = 24;
+  const ttX = Math.min(Math.max(cx - ttW/2, PAD.left), PAD.left + iW - ttW);
+  const nearTop = cy - PAD.top < ttH + 14;
+  const ttY = nearTop ? cy + 10 : cy - ttH - 10;
 
   return (
     <div>
@@ -244,7 +247,7 @@ function SpendCurveChart({ vals, activeZips, activePersonas, currentSpend }) {
           ))}
           <line x1={PAD.left} y1={PAD.top} x2={PAD.left} y2={PAD.top+iH} stroke="#e0e0dc" strokeWidth="1"/>
           <line x1={PAD.left} y1={PAD.top+iH} x2={PAD.left+iW} y2={PAD.top+iH} stroke="#e0e0dc" strokeWidth="1"/>
-          <text x={PAD.left+iW/2} y={H-0} textAnchor="middle" fill="#bbb" fontSize="10">Monthly spend ($K)</text>
+          <text x={PAD.left+iW/2} y={H-2} textAnchor="middle" fill="#bbb" fontSize="10">Monthly spend ($K)</text>
         </svg>
       </div>
       <div style={{ fontSize:11, color:"#bbb", marginTop:4 }}>Dashed line = current scenario · green dot = projected outcome</div>
